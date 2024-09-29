@@ -515,6 +515,12 @@ export class StreamingDelegate implements CameraStreamingDelegate {
         this.log.error('Error occurred terminating two-way FFmpeg process: ' + err, this.cameraName);
       }
     }
+
+    if (this.videoConfig.afterStreamCommand !== undefined) {
+      const output = execSync(this.videoConfig.afterStreamCommand, { encoding: 'utf-8' });  // the default is 'buffer'
+      this.log.debug('After stream command output:\n', output);
+    }
+
     this.ongoingSessions.delete(sessionId);
     this.log.info('Stopped video stream.', this.cameraName);
   }
