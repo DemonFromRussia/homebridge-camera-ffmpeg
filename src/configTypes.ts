@@ -49,6 +49,7 @@ export type VideoConfig = {
   audio?: boolean;
   debug?: boolean;
   debugReturn?: boolean;
+  preStreamCommand?: string;
 };
 
 export type MqttCameraConfig = {

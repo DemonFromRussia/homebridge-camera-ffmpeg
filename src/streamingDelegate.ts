@@ -19,7 +19,7 @@ import {
   StreamRequestTypes,
   VideoInfo
 } from 'homebridge';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { createSocket, Socket } from 'dgram';
 import ffmpegPath from 'ffmpeg-for-homebridge';
 import pickPort, { pickPortOptions } from 'pick-port';
@@ -348,6 +348,11 @@ export class StreamingDelegate implements CameraStreamingDelegate {
         resolution.videoFilter = undefined;
         fps = 0;
         videoBitrate = 0;
+      }
+
+      if (this.videoConfig.preStreamCommand !== undefined) {
+        const output = execSync(this.videoConfig.preStreamCommand, { encoding: 'utf-8' });  // the default is 'buffer'
+        this.log.debug('Pre stream command output:\n', output);
       }
 
       this.log.debug('Video stream requested: ' + request.video.width + ' x ' + request.video.height + ', ' +
