@@ -2,7 +2,14 @@
 
 All notable changes to this project will be documented in this file. This project uses [Semantic Versioning](https://semver.org/)
 
-## [4.0.0](https://github.com/homebridge-plugins/homebridge-camera-ffmpeg/releases/tag/v4.0.0) (2024-01-26)
+## [4.0.1](https://github.com/homebridge-plugins/homebridge-camera-ffmpeg/releases/tag/v4.0.1) (2025-03-04)
+
+### What's Changes
+- Housekeeping and updated dependencies.
+
+**Full Changelog**: https://github.com/homebridge-plugins/homebridge-camera-ffmpeg/compare/v4.0.0...v4.0.1
+
+## [4.0.0](https://github.com/homebridge-plugins/homebridge-camera-ffmpeg/releases/tag/v4.0.0) (2025-01-26)
 
 ### What's Changes
 #### Breaking Changes
