@@ -101,20 +101,66 @@ export class RecordingDelegate implements CameraRecordingDelegate {
     return Promise.resolve()
   }
 
-  updateRecordingConfiguration(): Promise<void> {
+  updateRecordingConfiguration(configuration: CameraRecordingConfiguration | undefined): Promise<void> {
     this.log.info('Recording configuration updated', this.cameraName)
+    this.currentRecordingConfiguration = configuration
     return Promise.resolve()
   }
 
   async *handleRecordingStreamRequest(streamId: number): AsyncGenerator<RecordingPacket, any, any> {
     this.log.info(`Recording stream request received for stream ID: ${streamId}`, this.cameraName)
-    // Implement the logic to handle the recording stream request here
-    // For now, just yield an empty RecordingPacket
-    yield {} as RecordingPacket
+    
+    if (!this.currentRecordingConfiguration) {
+      this.log.error('No recording configuration available', this.cameraName)
+      return
+    }
+
+    // Create abort controller for this stream
+    const abortController = new AbortController()
+    this.streamAbortControllers.set(streamId, abortController)
+
+    try {
+      // Use existing handleFragmentsRequests method but track the process
+      const fragmentGenerator = this.handleFragmentsRequests(this.currentRecordingConfiguration, streamId)
+      
+      for await (const fragmentBuffer of fragmentGenerator) {
+        // Check if stream was aborted
+        if (abortController.signal.aborted) {
+          this.log.debug(`Recording stream ${streamId} aborted, stopping generator`, this.cameraName)
+          break
+        }
+        
+        yield {
+          data: fragmentBuffer,
+          isLast: false // TODO: implement proper last fragment detection
+        }
+      }
+    } catch (error) {
+      this.log.error(`Recording stream error: ${error}`, this.cameraName)
+    } finally {
+      // Cleanup
+      this.streamAbortControllers.delete(streamId)
+      this.log.debug(`Recording stream ${streamId} generator finished`, this.cameraName)
+    }
   }
 
   closeRecordingStream(streamId: number, reason: HDSProtocolSpecificErrorReason | undefined): void {
     this.log.info(`Recording stream closed for stream ID: ${streamId}, reason: ${reason}`, this.cameraName)
+    
+    // Abort the stream generator
+    const abortController = this.streamAbortControllers.get(streamId)
+    if (abortController) {
+      abortController.abort()
+      this.streamAbortControllers.delete(streamId)
+    }
+    
+    // Kill any active FFmpeg processes for this stream
+    const process = this.activeFFmpegProcesses.get(streamId)
+    if (process && !process.killed) {
+      this.log.debug(`Terminating FFmpeg process for stream ${streamId}`, this.cameraName)
+      process.kill('SIGTERM')
+      this.activeFFmpegProcesses.delete(streamId)
+    }
   }
 
   private readonly hap: HAP
@@ -127,6 +173,11 @@ export class RecordingDelegate implements CameraRecordingDelegate {
   readonly controller?: CameraController
   private preBufferSession?: Mp4Session
   private preBuffer?: PreBuffer
+  
+  // Add fields for recording configuration and process management
+  private currentRecordingConfiguration?: CameraRecordingConfiguration
+  private activeFFmpegProcesses = new Map<number, ChildProcess>()
+  private streamAbortControllers = new Map<number, AbortController>()
 
   constructor(log: Logger, cameraName: string, videoConfig: VideoConfig, api: API, hap: HAP, videoProcessor?: string) {
     this.log = log
@@ -155,7 +206,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
     }
   }
 
-  async * handleFragmentsRequests(configuration: CameraRecordingConfiguration): AsyncGenerator<Buffer, void, unknown> {
+  async * handleFragmentsRequests(configuration: CameraRecordingConfiguration, streamId: number): AsyncGenerator<Buffer, void, unknown> {
     this.log.debug('video fragments requested', this.cameraName)
 
     const iframeIntervalSeconds = 4
@@ -218,6 +269,10 @@ export class RecordingDelegate implements CameraRecordingDelegate {
     this.log.info('Recording started', this.cameraName)
 
     const { socket, cp, generator } = session
+    
+    // Track the FFmpeg process for this stream
+    this.activeFFmpegProcesses.set(streamId, cp)
+
     let pending: Array<Buffer> = []
     let filebuffer: Buffer = Buffer.alloc(0)
     try {
@@ -246,6 +301,8 @@ export class RecordingDelegate implements CameraRecordingDelegate {
     } finally {
       socket.destroy()
       cp.kill()
+      // Remove from active processes tracking
+      this.activeFFmpegProcesses.delete(streamId)
       // this.server.close;
     }
   }
