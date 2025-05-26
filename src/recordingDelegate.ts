@@ -208,6 +208,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
 
   async * handleFragmentsRequests(configuration: CameraRecordingConfiguration, streamId: number): AsyncGenerator<Buffer, void, unknown> {
     this.log.debug('video fragments requested', this.cameraName)
+    this.log.debug(`DEBUG: handleFragmentsRequests called for stream ${streamId}`, this.cameraName)
 
     const iframeIntervalSeconds = 4
 
@@ -241,17 +242,25 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       'libx264',
       '-pix_fmt',
       'yuv420p',
-
       '-profile:v',
-      profile,
+      'baseline',
       '-level:v',
-      level,
+      '3.1',
+      '-vf', 'scale=\'min(1280,iw)\':\'min(720,ih)\':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2',
       '-b:v',
-      `${configuration.videoCodec.parameters.bitRate}k`,
+      '800k',
+      '-maxrate',
+      '1000k',
+      '-bufsize',
+      '1000k',
       '-force_key_frames',
-      `expr:eq(t,n_forced*${iframeIntervalSeconds})`,
-      '-r',
-      configuration.videoCodec.resolution[2].toString(),
+      'expr:gte(t,0)',
+      '-tune',
+      'zerolatency',
+      '-preset',
+      'ultrafast',
+      '-x264opts',
+      'no-scenecut:ref=1:bframes=0:cabac=0:no-deblock:intra-refresh=1',
     ]
 
     const ffmpegInput: Array<string> = []
@@ -343,29 +352,75 @@ export class RecordingDelegate implements CameraRecordingDelegate {
 
         args.push('-f', 'mp4')
         args.push(...videoOutputArgs)
-        args.push('-fflags', '+genpts', '-reset_timestamps', '1')
+        // Add error resilience for problematic H.264 streams
+        args.push('-err_detect', 'ignore_err')
+        args.push('-fflags', '+genpts+igndts+ignidx')
+        args.push('-reset_timestamps', '1')
+        args.push('-max_delay', '5000000')
         args.push(
           '-movflags',
-          'frag_keyframe+empty_moov+default_base_moof',
+          'frag_keyframe+empty_moov+default_base_moof+skip_sidx+skip_trailer',
           `tcp://127.0.0.1:${serverPort}`,
         )
 
         this.log.debug(`${ffmpegPath} ${args.join(' ')}`, this.cameraName)
 
-        const debug = false
+        // Enhanced debugging and logging for HomeKit Secure Video recording
+        this.log.debug(`DEBUG: startFFMPegFragmetedMP4Session called`, this.cameraName)
+        this.log.debug(`DEBUG: Video source: "${ffmpegInput.join(' ')}"`, this.cameraName)
+        this.log.debug(`DEBUG: FFmpeg input args: ${JSON.stringify(ffmpegInput)}`, this.cameraName)
+        this.log.debug(`DEBUG: Creating server`, this.cameraName)
+        this.log.debug(`DEBUG: Server listening on port ${serverPort}`, this.cameraName)
+        this.log.debug(`DEBUG: Complete FFmpeg command: ${ffmpegPath} ${args.join(' ')}`, this.cameraName)
+        this.log.debug(`DEBUG: Starting FFmpeg`, this.cameraName)
+
+        const debug = true // Enable debug for HKSV troubleshooting
 
         const stdioValue = debug ? 'pipe' : 'ignore'
         this.process = spawn(ffmpegPath, args, { env, stdio: stdioValue })
         const cp = this.process
 
+        this.log.debug(`DEBUG: FFmpeg started with PID ${cp.pid}`, this.cameraName)
+
         if (debug) {
+          let frameCount = 0
+          let lastLogTime = Date.now()
+          const logInterval = 5000 // Log every 5 seconds
+          
           if (cp.stdout) {
-            cp.stdout.on('data', (data: Buffer) => this.log.debug(data.toString(), this.cameraName))
+            cp.stdout.on('data', (data: Buffer) => {
+              const output = data.toString()
+              this.log.debug(`FFmpeg stdout: ${output}`, this.cameraName)
+            })
           }
           if (cp.stderr) {
-            cp.stderr.on('data', (data: Buffer) => this.log.debug(data.toString(), this.cameraName))
+            cp.stderr.on('data', (data: Buffer) => {
+              const output = data.toString()
+              
+              // Count frames for progress tracking
+              const frameMatch = output.match(/frame=\s*(\d+)/)
+              if (frameMatch) {
+                frameCount = parseInt(frameMatch[1])
+                const now = Date.now()
+                if (now - lastLogTime >= logInterval) {
+                  this.log.info(`Recording progress: ${frameCount} frames processed`, this.cameraName)
+                  lastLogTime = now
+                }
+              }
+              
+              this.log.debug(`FFmpeg stderr: ${output}`, this.cameraName)
+            })
           }
         }
+        
+        // Enhanced process cleanup and error handling
+        cp.on('exit', (code, signal) => {
+          this.log.debug(`DEBUG: FFmpeg process ${cp.pid} exited with code ${code}, signal ${signal}`, this.cameraName)
+        })
+        
+        cp.on('error', (error) => {
+          this.log.error(`DEBUG: FFmpeg process error: ${error}`, this.cameraName)
+        })
       })
     })
   }
