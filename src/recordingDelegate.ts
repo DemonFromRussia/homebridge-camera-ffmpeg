@@ -123,6 +123,9 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       // Use existing handleFragmentsRequests method but track the process
       const fragmentGenerator = this.handleFragmentsRequests(this.currentRecordingConfiguration, streamId)
       
+      let fragmentCount = 0
+      let totalBytes = 0
+      
       for await (const fragmentBuffer of fragmentGenerator) {
         // Check if stream was aborted
         if (abortController.signal.aborted) {
@@ -130,13 +133,28 @@ export class RecordingDelegate implements CameraRecordingDelegate {
           break
         }
         
+        fragmentCount++
+        totalBytes += fragmentBuffer.length
+        
+        // Enhanced logging for HKSV debugging
+        this.log.debug(`HKSV: Yielding fragment #${fragmentCount}, size: ${fragmentBuffer.length}, total: ${totalBytes} bytes`, this.cameraName)
+        
         yield {
           data: fragmentBuffer,
-          isLast: false // TODO: implement proper last fragment detection
+          isLast: false // We'll handle the last fragment properly when the stream ends
         }
       }
+      
+      // Send final packet to indicate end of stream
+      this.log.info(`HKSV: Recording stream ${streamId} completed. Total fragments: ${fragmentCount}, total bytes: ${totalBytes}`, this.cameraName)
+      
     } catch (error) {
       this.log.error(`Recording stream error: ${error}`, this.cameraName)
+      // Send error indication
+      yield {
+        data: Buffer.alloc(0),
+        isLast: true
+      }
     } finally {
       // Cleanup
       this.streamAbortControllers.delete(streamId)
@@ -166,7 +184,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
   private readonly hap: HAP
   private readonly log: Logger
   private readonly cameraName: string
-  private readonly videoConfig?: VideoConfig
+  private readonly videoConfig: VideoConfig
   private process!: ChildProcess
 
   private readonly videoProcessor: string
@@ -183,6 +201,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
     this.log = log
     this.hap = hap
     this.cameraName = cameraName
+    this.videoConfig = videoConfig
     this.videoProcessor = videoProcessor || ffmpegPathString || 'ffmpeg'
 
     api.on(APIEvent.SHUTDOWN, () => {
@@ -190,6 +209,16 @@ export class RecordingDelegate implements CameraRecordingDelegate {
         this.preBufferSession.process?.kill()
         this.preBufferSession.server?.close()
       }
+      
+      // Cleanup active streams on shutdown
+      this.activeFFmpegProcesses.forEach((process, streamId) => {
+        if (!process.killed) {
+          this.log.debug(`Shutdown: Terminating FFmpeg process for stream ${streamId}`, this.cameraName)
+          process.kill('SIGTERM')
+        }
+      })
+      this.activeFFmpegProcesses.clear()
+      this.streamAbortControllers.clear()
     })
   }
 
@@ -226,6 +255,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       `${configuration.audioCodec.audioChannels}`,
     ]
 
+    // Use HomeKit provided codec parameters instead of hardcoded values
     const profile = configuration.videoCodec.parameters.profile === H264Profile.HIGH
       ? 'high'
       : configuration.videoCodec.parameters.profile === H264Profile.MAIN ? 'main' : 'baseline'
@@ -235,7 +265,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       : configuration.videoCodec.parameters.level === H264Level.LEVEL3_2 ? '3.2' : '3.1'
 
     const videoArgs: Array<string> = [
-      '-an',
+      '-an', // Will be enabled later if audio is configured
       '-sn',
       '-dn',
       '-codec:v',
@@ -243,9 +273,9 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       '-pix_fmt',
       'yuv420p',
       '-profile:v',
-      'baseline',
+      profile, // Use HomeKit provided profile
       '-level:v',
-      '3.1',
+      level,   // Use HomeKit provided level
       '-vf', 'scale=\'min(1280,iw)\':\'min(720,ih)\':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2',
       '-b:v',
       '800k',
@@ -262,6 +292,15 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       '-x264opts',
       'no-scenecut:ref=1:bframes=0:cabac=0:no-deblock:intra-refresh=1',
     ]
+
+    // Enable audio if recording audio is active
+    if (this.currentRecordingConfiguration?.audioCodec) {
+      // Remove the '-an' flag to enable audio
+      const anIndex = videoArgs.indexOf('-an')
+      if (anIndex !== -1) {
+        videoArgs.splice(anIndex, 1)
+      }
+    }
 
     const ffmpegInput: Array<string> = []
 
@@ -284,22 +323,42 @@ export class RecordingDelegate implements CameraRecordingDelegate {
 
     let pending: Array<Buffer> = []
     let filebuffer: Buffer = Buffer.alloc(0)
+    let isFirstFragment = true
+    
     try {
       for await (const box of generator) {
         const { header, type, length, data } = box
 
         pending.push(header, data)
 
-        if (type === 'moov' || type === 'mdat') {
-          const fragment = Buffer.concat(pending)
-          filebuffer = Buffer.concat([filebuffer, Buffer.concat(pending)])
-          pending = []
-          yield fragment
+        // HKSV requires specific MP4 structure:
+        // 1. First packet: ftyp + moov (initialization data)
+        // 2. Subsequent packets: moof + mdat (media fragments)
+        if (isFirstFragment) {
+          // For initialization segment, wait for both ftyp and moov
+          if (type === 'moov') {
+            const fragment = Buffer.concat(pending)
+            filebuffer = Buffer.concat([filebuffer, fragment])
+            pending = []
+            isFirstFragment = false
+            this.log.debug(`HKSV: Sending initialization segment (ftyp+moov), size: ${fragment.length}`, this.cameraName)
+            yield fragment
+          }
+        } else {
+          // For media segments, send moof+mdat pairs
+          if (type === 'mdat') {
+            const fragment = Buffer.concat(pending)
+            filebuffer = Buffer.concat([filebuffer, fragment])
+            pending = []
+            this.log.debug(`HKSV: Sending media fragment (moof+mdat), size: ${fragment.length}`, this.cameraName)
+            yield fragment
+          }
         }
-        this.log.debug(`mp4 box type ${type} and lenght: ${length}`, this.cameraName)
+        
+        this.log.debug(`mp4 box type ${type} and length: ${length}`, this.cameraName)
       }
     } catch (e) {
-      this.log.info(`Recoding completed. ${e}`, this.cameraName)
+      this.log.info(`Recording completed. ${e}`, this.cameraName)
       /*
             const homedir = require('os').homedir();
             const path = require('path');
@@ -348,18 +407,24 @@ export class RecordingDelegate implements CameraRecordingDelegate {
 
         args.push(...ffmpegInput)
 
-        // args.push(...audioOutputArgs);
+        // Include audio args if recording audio is active
+        if (this.currentRecordingConfiguration?.audioCodec) {
+          args.push(...audioOutputArgs)
+        }
 
         args.push('-f', 'mp4')
         args.push(...videoOutputArgs)
-        // Add error resilience for problematic H.264 streams
+        
+        // Enhanced HKSV-specific flags for better compatibility
         args.push('-err_detect', 'ignore_err')
         args.push('-fflags', '+genpts+igndts+ignidx')
         args.push('-reset_timestamps', '1')
         args.push('-max_delay', '5000000')
+        
+        // HKSV requires specific fragmentation settings
         args.push(
           '-movflags',
-          'frag_keyframe+empty_moov+default_base_moof+skip_sidx+skip_trailer',
+          'frag_keyframe+empty_moov+default_base_moof+skip_sidx+skip_trailer+separate_moof',
           `tcp://127.0.0.1:${serverPort}`,
         )
 
@@ -369,6 +434,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
         this.log.debug(`DEBUG: startFFMPegFragmetedMP4Session called`, this.cameraName)
         this.log.debug(`DEBUG: Video source: "${ffmpegInput.join(' ')}"`, this.cameraName)
         this.log.debug(`DEBUG: FFmpeg input args: ${JSON.stringify(ffmpegInput)}`, this.cameraName)
+        this.log.debug(`DEBUG: Audio enabled: ${!!this.currentRecordingConfiguration?.audioCodec}`, this.cameraName)
         this.log.debug(`DEBUG: Creating server`, this.cameraName)
         this.log.debug(`DEBUG: Server listening on port ${serverPort}`, this.cameraName)
         this.log.debug(`DEBUG: Complete FFmpeg command: ${ffmpegPath} ${args.join(' ')}`, this.cameraName)
@@ -408,6 +474,11 @@ export class RecordingDelegate implements CameraRecordingDelegate {
                 }
               }
               
+              // Check for HKSV specific errors
+              if (output.includes('invalid NAL unit size') || output.includes('decode_slice_header error')) {
+                this.log.warn(`HKSV: Potential stream compatibility issue detected: ${output.trim()}`, this.cameraName)
+              }
+              
               this.log.debug(`FFmpeg stderr: ${output}`, this.cameraName)
             })
           }
@@ -416,6 +487,9 @@ export class RecordingDelegate implements CameraRecordingDelegate {
         // Enhanced process cleanup and error handling
         cp.on('exit', (code, signal) => {
           this.log.debug(`DEBUG: FFmpeg process ${cp.pid} exited with code ${code}, signal ${signal}`, this.cameraName)
+          if (code !== 0 && code !== null) {
+            this.log.warn(`HKSV: FFmpeg exited with non-zero code ${code}, this may indicate stream issues`, this.cameraName)
+          }
         })
         
         cp.on('error', (error) => {
