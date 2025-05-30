@@ -165,6 +165,39 @@ export class RecordingDelegate implements CameraRecordingDelegate {
   closeRecordingStream(streamId: number, reason: HDSProtocolSpecificErrorReason | undefined): void {
     this.log.info(`Recording stream closed for stream ID: ${streamId}, reason: ${reason}`, this.cameraName)
     
+    // Enhanced reason code diagnostics for HKSV debugging
+    switch (reason) {
+      case 0:
+        this.log.info(`✅ HKSV: Recording ended normally (reason 0)`, this.cameraName)
+        break
+      case 1:
+        this.log.warn(`⚠️ HKSV: Recording ended due to generic error (reason 1)`, this.cameraName)
+        break
+      case 2:
+        this.log.warn(`⚠️ HKSV: Recording ended due to network issues (reason 2)`, this.cameraName)
+        break
+      case 3:
+        this.log.warn(`⚠️ HKSV: Recording ended due to insufficient resources (reason 3)`, this.cameraName)
+        break
+      case 4:
+        this.log.warn(`⚠️ HKSV: Recording ended due to HomeKit busy (reason 4)`, this.cameraName)
+        break
+      case 5:
+        this.log.warn(`⚠️ HKSV: Recording ended due to insufficient buffer space (reason 5)`, this.cameraName)
+        break
+      case 6:
+        this.log.warn(`❌ HKSV: Recording ended due to STREAM FORMAT INCOMPATIBILITY (reason 6) - Check H.264 parameters!`, this.cameraName)
+        break
+      case 7:
+        this.log.warn(`⚠️ HKSV: Recording ended due to maximum recording time exceeded (reason 7)`, this.cameraName)
+        break
+      case 8:
+        this.log.warn(`⚠️ HKSV: Recording ended due to HomeKit storage full (reason 8)`, this.cameraName)
+        break
+      default:
+        this.log.warn(`❓ HKSV: Unknown reason ${reason}`, this.cameraName)
+    }
+    
     // Abort the stream generator
     const abortController = this.streamAbortControllers.get(streamId)
     if (abortController) {
@@ -262,7 +295,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       '1',
     ]
 
-    // Universal encoding for HKSV compatibility - works with any input source  
+    // Enhanced H.264 encoding for maximum HKSV compatibility
     const videoArgs: Array<string> = [
       // Only disable audio if explicitly disabled in config
       ...(this.videoConfig?.audio === false ? ['-an'] : []),
@@ -277,23 +310,29 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       '-level:v',
       '3.1',      // Force level 3.1 for HKSV compatibility
       '-preset',
-      'ultrafast',
+      'fast',     // Changed from ultrafast for better quality/compatibility balance
       '-tune',
       'zerolatency',
+      '-x264opts',
+      'no-scenecut', // Disable scene cut detection for consistent GOP
       '-g',
-      '60',
+      '30',       // Shorter GOP for better HKSV compatibility (was 60)
       '-keyint_min',
-      '60',
+      '30',       // Match GOP size
       '-sc_threshold',
-      '0',
+      '0',        // Disable scene change detection
       '-force_key_frames',
-      'expr:gte(t,n_forced*4)',
+      'expr:gte(t,n_forced*2)', // Every 2 seconds instead of 4
+      '-refs',
+      '1',        // Use single reference frame for baseline
       '-b:v',
-      '800k',
+      '600k',     // Lower bitrate for better reliability (was 800k)
       '-maxrate',
-      '1000k',
+      '800k',     // Lower max rate (was 1000k)
       '-bufsize',
-      '1000k',
+      '600k',     // Match bitrate for consistent rate control
+      '-r',
+      '15',       // Fixed 15fps for more stable recording
     ]
 
     const ffmpegInput: Array<string> = []
@@ -337,6 +376,9 @@ export class RecordingDelegate implements CameraRecordingDelegate {
         const { header, type, length, data } = box
 
         pending.push(header, data)
+        
+        // Enhanced MP4 box logging for HKSV debugging
+        this.log.debug(`📦 HKSV DEBUG: Received MP4 box type '${type}', length: ${length}`, this.cameraName)
 
         // HKSV requires specific MP4 structure:
         // 1. First packet: ftyp + moov (initialization data)
@@ -348,7 +390,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
             filebuffer = Buffer.concat([filebuffer, fragment])
             pending = []
             isFirstFragment = false
-            this.log.debug(`HKSV: Sending initialization segment (ftyp+moov), size: ${fragment.length}`, this.cameraName)
+            this.log.info(`🚀 HKSV: Sending initialization segment (ftyp+moov), size: ${fragment.length}`, this.cameraName)
             yield fragment
           }
         } else {
@@ -357,12 +399,10 @@ export class RecordingDelegate implements CameraRecordingDelegate {
             const fragment = Buffer.concat(pending)
             filebuffer = Buffer.concat([filebuffer, fragment])
             pending = []
-            this.log.debug(`HKSV: Sending media fragment (moof+mdat), size: ${fragment.length}`, this.cameraName)
+            this.log.info(`📹 HKSV: Sending media fragment (moof+mdat), size: ${fragment.length}`, this.cameraName)
             yield fragment
           }
         }
-        
-        this.log.debug(`mp4 box type ${type} and length: ${length}`, this.cameraName)
       }
     } catch (e) {
       this.log.info(`Recording completed. ${e}`, this.cameraName)
