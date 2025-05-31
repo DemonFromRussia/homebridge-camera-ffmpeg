@@ -269,285 +269,184 @@ export class RecordingDelegate implements CameraRecordingDelegate {
   }
 
   async * handleFragmentsRequests(configuration: CameraRecordingConfiguration, streamId: number): AsyncGenerator<Buffer, void, unknown> {
-    this.log.info(`🔍 HKSV DEBUG: Starting handleFragmentsRequests for stream ${streamId}`, this.cameraName)
-    this.log.debug('video fragments requested', this.cameraName)
-    this.log.debug(`DEBUG: handleFragmentsRequests called for stream ${streamId}`, this.cameraName)
+    let moofBuffer: Buffer | null = null
+    let fragmentCount = 0
+    
+    this.log.debug('HKSV: Starting recording request', this.cameraName)
 
-    // EXTENSIVE DEBUGGING for HKSV troubleshooting
-    this.log.info(`🔧 HKSV DEBUG: videoConfig exists: ${!!this.videoConfig}`, this.cameraName)
-    this.log.info(`🔧 HKSV DEBUG: videoConfig.source: "${this.videoConfig?.source || 'UNDEFINED'}"`, this.cameraName)
-    this.log.info(`🔧 HKSV DEBUG: videoConfig.audio: ${this.videoConfig?.audio}`, this.cameraName)
-    this.log.info(`🔧 HKSV DEBUG: videoConfig.prebuffer: ${this.videoConfig?.prebuffer}`, this.cameraName)
-    this.log.info(`🔧 HKSV DEBUG: configuration exists: ${!!configuration}`, this.cameraName)
-
-    const iframeIntervalSeconds = 4
-
-    const audioArgs: Array<string> = [
-      '-acodec',
-      'aac', // Use standard aac encoder for better compatibility
-      '-profile:a',
-      'aac_low',
-      '-ar',
-      '32k', // Use proven audio settings for HomeKit
-      '-b:a',
-      '64k',
-      '-ac',
-      '1',
-    ]
-
-    // Enhanced H.264 encoding for maximum HKSV compatibility
+    // Clean H.264 parameters for HKSV compatibility
     const videoArgs: Array<string> = [
-      // Only disable audio if explicitly disabled in config
-      ...(this.videoConfig?.audio === false ? ['-an'] : []),
-      '-sn',
-      '-dn',
-      '-vcodec',
-      'libx264',
-      '-pix_fmt',
-      'yuv420p',
-      '-profile:v',
-      'baseline', // Force baseline for maximum HKSV compatibility
-      '-level:v',
-      '3.1',      // Force level 3.1 for HKSV compatibility
-      '-preset',
-      'fast',     // Changed from ultrafast for better quality/compatibility balance
-      '-tune',
-      'zerolatency',
-      '-x264opts',
-      'no-scenecut', // Disable scene cut detection for consistent GOP
-      '-g',
-      '30',       // Shorter GOP for better HKSV compatibility (was 60)
-      '-keyint_min',
-      '30',       // Match GOP size
-      '-sc_threshold',
-      '0',        // Disable scene change detection
-      '-force_key_frames',
-      'expr:gte(t,n_forced*2)', // Every 2 seconds instead of 4
-      '-refs',
-      '1',        // Use single reference frame for baseline
-      '-b:v',
-      '600k',     // Lower bitrate for better reliability (was 800k)
-      '-maxrate',
-      '800k',     // Lower max rate (was 1000k)
-      '-bufsize',
-      '600k',     // Match bitrate for consistent rate control
-      '-r',
-      '15',       // Fixed 15fps for more stable recording
+      '-an', '-sn', '-dn',            // Disable audio/subtitles/data (audio handled separately)
+      '-vcodec', 'libx264',
+      '-pix_fmt', 'yuv420p',
+      '-profile:v', 'baseline',
+      '-level:v', '3.1',              
+      '-preset', 'ultrafast',         
+      '-tune', 'zerolatency',         
+      '-b:v', '600k',                 
+      '-maxrate', '700k',             
+      '-bufsize', '1400k',            
+      '-g', '30',                     
+      '-keyint_min', '15',            
+      '-sc_threshold', '0',           
+      '-force_key_frames', 'expr:gte(t,n_forced*1)'
     ]
 
+    // Get input configuration
     const ffmpegInput: Array<string> = []
-
     if (this.videoConfig?.prebuffer) {
-      this.log.info(`🔧 HKSV DEBUG: Using prebuffer mode`, this.cameraName)
-      const input: Array<string> = this.preBuffer ? await this.preBuffer.getVideo(configuration.mediaContainerConfiguration.fragmentLength ?? PREBUFFER_LENGTH) : []
-      this.log.info(`🔧 HKSV DEBUG: Prebuffer input: ${JSON.stringify(input)}`, this.cameraName)
+      const input: Array<string> = this.preBuffer ? 
+        await this.preBuffer.getVideo(configuration.mediaContainerConfiguration.fragmentLength ?? PREBUFFER_LENGTH) : []
       ffmpegInput.push(...input)
     } else {
-      this.log.info(`🔧 HKSV DEBUG: Using direct source mode`, this.cameraName)
-      const sourceArgs = (this.videoConfig?.source ?? '').split(' ')
-      this.log.info(`🔧 HKSV DEBUG: Source args: ${JSON.stringify(sourceArgs)}`, this.cameraName)
-      ffmpegInput.push(...sourceArgs)
+      if (!this.videoConfig?.source) {
+        throw new Error('No video source configured')
+      }
+      ffmpegInput.push(...this.videoConfig.source.split(' '))
     }
     
-    this.log.info(`🔧 HKSV DEBUG: Final ffmpegInput: ${JSON.stringify(ffmpegInput)}`, this.cameraName)
-    this.log.info(`🔧 HKSV DEBUG: ffmpegInput length: ${ffmpegInput.length}`, this.cameraName)
-    
     if (ffmpegInput.length === 0) {
-      this.log.error(`🚨 HKSV ERROR: ffmpegInput is empty! This will cause FFmpeg to fail with code 234`, this.cameraName)
       throw new Error('No video source configured for recording')
     }
 
-    this.log.debug('Start recording...', this.cameraName)
-
-    const session = await this.startFFMPegFragmetedMP4Session(this.videoProcessor, ffmpegInput, audioArgs, videoArgs)
-    this.log.info('Recording started', this.cameraName)
-
-    const { socket, cp, generator } = session
+    // Start FFmpeg session
+    const session = await this.startFFMPegFragmetedMP4Session(this.videoProcessor, ffmpegInput, videoArgs)
+    const { cp, generator } = session
     
-    // Track the FFmpeg process for this stream
+    // Track process for cleanup
     this.activeFFmpegProcesses.set(streamId, cp)
 
     let pending: Array<Buffer> = []
-    let filebuffer: Buffer = Buffer.alloc(0)
     let isFirstFragment = true
     
     try {
       for await (const box of generator) {
-        const { header, type, length, data } = box
-
+        const { header, type, data } = box
         pending.push(header, data)
-        
-        // Enhanced MP4 box logging for HKSV debugging
-        this.log.debug(`📦 HKSV DEBUG: Received MP4 box type '${type}', length: ${length}`, this.cameraName)
 
-        // HKSV requires specific MP4 structure:
-        // 1. First packet: ftyp + moov (initialization data)
-        // 2. Subsequent packets: moof + mdat (media fragments)
         if (isFirstFragment) {
-          // For initialization segment, wait for both ftyp and moov
           if (type === 'moov') {
             const fragment = Buffer.concat(pending)
-            filebuffer = Buffer.concat([filebuffer, fragment])
             pending = []
             isFirstFragment = false
-            this.log.info(`🚀 HKSV: Sending initialization segment (ftyp+moov), size: ${fragment.length}`, this.cameraName)
+            this.log.debug(`HKSV: Sending initialization segment, size: ${fragment.length}`, this.cameraName)
             yield fragment
           }
         } else {
-          // For media segments, send moof+mdat pairs
-          if (type === 'mdat') {
-            const fragment = Buffer.concat(pending)
-            filebuffer = Buffer.concat([filebuffer, fragment])
-            pending = []
-            this.log.info(`📹 HKSV: Sending media fragment (moof+mdat), size: ${fragment.length}`, this.cameraName)
+          if (type === 'moof') {
+            moofBuffer = Buffer.concat([header, data])
+          } else if (type === 'mdat' && moofBuffer) {
+            const fragment = Buffer.concat([moofBuffer, header, data])
+            fragmentCount++
+            this.log.debug(`HKSV: Fragment ${fragmentCount}, size: ${fragment.length}`, this.cameraName)
             yield fragment
+            moofBuffer = null
           }
         }
       }
     } catch (e) {
-      this.log.info(`Recording completed. ${e}`, this.cameraName)
-      /*
-            const homedir = require('os').homedir();
-            const path = require('path');
-            const writeStream = fs.createWriteStream(homedir+path.sep+Date.now()+'_video.mp4');
-            writeStream.write(filebuffer);
-            writeStream.end();
-            */
+      this.log.debug(`Recording completed: ${e}`, this.cameraName)
     } finally {
-      socket.destroy()
-      cp.kill()
-      // Remove from active processes tracking
+      // Fast cleanup
+      if (cp && !cp.killed) {
+        cp.kill('SIGTERM')
+        setTimeout(() => cp.killed || cp.kill('SIGKILL'), 2000)
+      }
       this.activeFFmpegProcesses.delete(streamId)
-      // this.server.close;
     }
   }
 
-  async startFFMPegFragmetedMP4Session(ffmpegPath: string, ffmpegInput: Array<string>, audioOutputArgs: Array<string>, videoOutputArgs: Array<string>): Promise<FFMpegFragmentedMP4Session> {
-    return new Promise((resolve) => {
-      const server = createServer((socket) => {
-        server.close()
-        async function* generator(): AsyncGenerator<MP4Atom> {
-          while (true) {
-            const header = await readLength(socket, 8)
+  private startFFMPegFragmetedMP4Session(ffmpegPath: string, ffmpegInput: string[], videoOutputArgs: string[]): Promise<{
+    generator: AsyncIterable<{ header: Buffer; length: number; type: string; data: Buffer }>;
+    cp: import('node:child_process').ChildProcess;
+  }> {
+    return new Promise((resolve, reject) => {
+      const args: string[] = [...ffmpegInput]
+      
+      // Add dummy audio for HKSV compatibility if needed
+      if (this.videoConfig?.audio === false) {
+        args.push(
+          '-f', 'lavfi', '-i', 'anullsrc=cl=mono:r=16000',
+          '-c:a', 'aac', '-profile:a', 'aac_low', 
+          '-ac', '1', '-ar', '16000', '-b:a', '32k', '-shortest'
+        )
+      }
+
+      args.push(
+        '-f', 'mp4',
+        ...videoOutputArgs,
+        '-movflags', 'frag_keyframe+empty_moov+default_base_moof+omit_tfhd_offset',
+        'pipe:1'
+      )
+      
+      // Terminate any previous process quickly
+      if (this.process && !this.process.killed) {
+        this.process.kill('SIGKILL')
+      }
+      
+      this.process = spawn(ffmpegPath, args, { 
+        env, 
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+      
+      const cp = this.process
+      let processKilledIntentionally = false
+      
+      // Optimized MP4 generator
+      async function* generator() {
+        if (!cp.stdout) throw new Error('FFmpeg stdout unavailable')
+        
+        while (true) {
+          try {
+            const header = await readLength(cp.stdout, 8)
             const length = header.readInt32BE(0) - 8
             const type = header.slice(4).toString()
-            const data = await readLength(socket, length)
-
-            yield {
-              header,
-              length,
-              type,
-              data,
+            
+            if (length < 0 || length > 50 * 1024 * 1024) { // Max 50MB
+              throw new Error(`Invalid MP4 box: ${length}B for ${type}`)
             }
+            
+            const data = await readLength(cp.stdout, length)
+            yield { header, length, type, data }
+          } catch (error) {
+            if (!processKilledIntentionally) throw error
+            break
           }
         }
-        const cp = this.process
-        resolve({
-          socket,
-          cp,
-          generator: generator(),
+      }
+      
+      // Minimal stderr handling
+      if (cp.stderr) {
+        cp.stderr.on('data', (data) => {
+          const output = data.toString()
+          if (output.includes('error') || output.includes('Error')) {
+            this.log.error(`FFmpeg: ${output.trim()}`, this.cameraName)
+          }
         })
+      }
+      
+      cp.on('spawn', () => {
+        resolve({ generator: generator(), cp })
       })
-
-      listenServer(server, this.log).then((serverPort) => {
-        const args: Array<string> = []
-
-        args.push(...ffmpegInput)
-
-        // Include audio only if enabled in config
-        if (this.videoConfig?.audio !== false) {
-          args.push(...audioOutputArgs)
+      
+      cp.on('error', reject)
+      
+      cp.on('exit', (code, signal) => {
+        if (code !== 0 && !processKilledIntentionally && code !== 255) {
+          this.log.warn(`FFmpeg exited with code ${code}`, this.cameraName)
         }
-
-        args.push('-f', 'mp4')
-        args.push(...videoOutputArgs)
-        
-        // Optimized fragmentation settings that work with HKSV
-        args.push('-movflags', 'frag_keyframe+empty_moov+default_base_moof+skip_sidx+skip_trailer')
-        args.push(
-          '-fflags',
-          '+genpts+igndts+ignidx'
-        )
-        args.push('-reset_timestamps', '1')
-        args.push('-max_delay', '5000000')
-        
-        args.push(
-          '-err_detect',
-          'ignore_err'
-        )
-
-        args.push(
-          `tcp://127.0.0.1:${serverPort}`
-        )
-
-        this.log.debug(`${ffmpegPath} ${args.join(' ')}`, this.cameraName)
-
-        // Enhanced debugging and logging for HomeKit Secure Video recording
-        this.log.debug(`DEBUG: startFFMPegFragmetedMP4Session called`, this.cameraName)
-        this.log.debug(`DEBUG: Video source: "${ffmpegInput.join(' ')}"`, this.cameraName)
-        this.log.debug(`DEBUG: FFmpeg input args: ${JSON.stringify(ffmpegInput)}`, this.cameraName)
-        this.log.debug(`DEBUG: Audio enabled: ${!!this.currentRecordingConfiguration?.audioCodec}`, this.cameraName)
-        this.log.debug(`DEBUG: Creating server`, this.cameraName)
-        this.log.debug(`DEBUG: Server listening on port ${serverPort}`, this.cameraName)
-        this.log.debug(`DEBUG: Complete FFmpeg command: ${ffmpegPath} ${args.join(' ')}`, this.cameraName)
-        this.log.debug(`DEBUG: Starting FFmpeg`, this.cameraName)
-
-        const debug = true // Enable debug for HKSV troubleshooting
-
-        const stdioValue = debug ? 'pipe' : 'ignore'
-        this.process = spawn(ffmpegPath, args, { env, stdio: stdioValue })
-        const cp = this.process
-
-        this.log.debug(`DEBUG: FFmpeg started with PID ${cp.pid}`, this.cameraName)
-
-        if (debug) {
-          let frameCount = 0
-          let lastLogTime = Date.now()
-          const logInterval = 5000 // Log every 5 seconds
-          
-          if (cp.stdout) {
-            cp.stdout.on('data', (data: Buffer) => {
-              const output = data.toString()
-              this.log.debug(`FFmpeg stdout: ${output}`, this.cameraName)
-            })
-          }
-          if (cp.stderr) {
-            cp.stderr.on('data', (data: Buffer) => {
-              const output = data.toString()
-              
-              // Count frames for progress tracking
-              const frameMatch = output.match(/frame=\s*(\d+)/)
-              if (frameMatch) {
-                frameCount = parseInt(frameMatch[1])
-                const now = Date.now()
-                if (now - lastLogTime >= logInterval) {
-                  this.log.info(`Recording progress: ${frameCount} frames processed`, this.cameraName)
-                  lastLogTime = now
-                }
-              }
-              
-              // Check for HKSV specific errors
-              if (output.includes('invalid NAL unit size') || output.includes('decode_slice_header error')) {
-                this.log.warn(`HKSV: Potential stream compatibility issue detected: ${output.trim()}`, this.cameraName)
-              }
-              
-              this.log.debug(`FFmpeg stderr: ${output}`, this.cameraName)
-            })
-          }
-        }
-        
-        // Enhanced process cleanup and error handling
-        cp.on('exit', (code, signal) => {
-          this.log.debug(`DEBUG: FFmpeg process ${cp.pid} exited with code ${code}, signal ${signal}`, this.cameraName)
-          if (code !== 0 && code !== null) {
-            this.log.warn(`HKSV: FFmpeg exited with non-zero code ${code}, this may indicate stream issues`, this.cameraName)
-          }
-        })
-        
-        cp.on('error', (error) => {
-          this.log.error(`DEBUG: FFmpeg process error: ${error}`, this.cameraName)
-        })
       })
+      
+      // Fast cleanup
+      const cleanup = () => {
+        processKilledIntentionally = true
+        if (cp && !cp.killed) {
+          cp.kill('SIGTERM')
+          setTimeout(() => cp.killed || cp.kill('SIGKILL'), 2000)
+        }
+      }
+      
+      ;(cp as any).cleanup = cleanup
     })
   }
 }
