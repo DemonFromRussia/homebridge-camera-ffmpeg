@@ -197,7 +197,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       default:
         this.log.warn(`❓ HKSV: Unknown reason ${reason}`, this.cameraName)
     }
-    
+
     // Abort the stream generator
     const abortController = this.streamAbortControllers.get(streamId)
     if (abortController) {
@@ -273,14 +273,35 @@ export class RecordingDelegate implements CameraRecordingDelegate {
     let fragmentCount = 0
     
     this.log.debug('HKSV: Starting recording request', this.cameraName)
+    const audioArgs: Array<string> = [
+      '-acodec',
+      'aac',
+      ...(configuration.audioCodec.type === AudioRecordingCodecType.AAC_LC
+        ? ['-profile:a', 'aac_low']
+        : ['-profile:a', 'aac_eld']),
+      '-ar', '32000',
+      //`${configuration.audioCodec.samplerate * 1000}`, // i see 3k here before, 3000 also will not work
+      '-b:a',
+      `${configuration.audioCodec.bitrate}k`,
+      '-ac',
+      `${configuration.audioCodec.audioChannels}`,
+    ]
+
+    const profile = configuration.videoCodec.parameters.profile === H264Profile.HIGH
+      ? 'high'
+      : configuration.videoCodec.parameters.profile === H264Profile.MAIN ? 'main' : 'baseline'
+
+    const level = configuration.videoCodec.parameters.level === H264Level.LEVEL4_0
+      ? '4.0'
+      : configuration.videoCodec.parameters.level === H264Level.LEVEL3_2 ? '3.2' : '3.1'
 
     // Clean H.264 parameters for HKSV compatibility
     const videoArgs: Array<string> = [
       '-an', '-sn', '-dn',            // Disable audio/subtitles/data (audio handled separately)
       '-vcodec', 'libx264',
       '-pix_fmt', 'yuv420p',
-      '-profile:v', 'baseline',
-      '-level:v', '3.1',              
+      '-profile:v', profile, // 'baseline' tested
+      '-level:v', level, // '3.1' tested
       '-preset', 'ultrafast',         
       '-tune', 'zerolatency',         
       '-b:v', '600k',                 
@@ -292,6 +313,14 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       '-force_key_frames', 'expr:gte(t,n_forced*1)'
     ]
 
+    if (configuration?.audioCodec) {
+      // Remove the '-an' flag to enable audio
+      const anIndex = videoArgs.indexOf('-an')
+      if (anIndex !== -1) {
+        videoArgs.splice(anIndex, 1, ...audioArgs)
+      }
+    }
+
     // Get input configuration
     const ffmpegInput: Array<string> = []
     if (this.videoConfig?.prebuffer) {
@@ -302,7 +331,7 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       if (!this.videoConfig?.source) {
         throw new Error('No video source configured')
       }
-      ffmpegInput.push(...this.videoConfig.source.split(' '))
+      ffmpegInput.push(...this.videoConfig.source.trim().split(/\s+/).filter(arg => arg.length > 0))
     }
     
     if (ffmpegInput.length === 0) {
@@ -361,14 +390,12 @@ export class RecordingDelegate implements CameraRecordingDelegate {
     cp: import('node:child_process').ChildProcess;
   }> {
     return new Promise((resolve, reject) => {
-      const args: string[] = [...ffmpegInput]
+      const args: string[] = ['-hide_banner', ...ffmpegInput]
       
       // Add dummy audio for HKSV compatibility if needed
       if (this.videoConfig?.audio === false) {
         args.push(
-          '-f', 'lavfi', '-i', 'anullsrc=cl=mono:r=16000',
-          '-c:a', 'aac', '-profile:a', 'aac_low', 
-          '-ac', '1', '-ar', '16000', '-b:a', '32k', '-shortest'
+          '-f', 'lavfi', '-i', 'anullsrc=cl=mono:r=32000',
         )
       }
 
@@ -428,13 +455,25 @@ export class RecordingDelegate implements CameraRecordingDelegate {
       cp.on('spawn', () => {
         resolve({ generator: generator(), cp })
       })
-      
+
       cp.on('error', reject)
       
       cp.on('exit', (code, signal) => {
         if (code !== 0 && !processKilledIntentionally && code !== 255) {
           this.log.warn(`FFmpeg exited with code ${code}`, this.cameraName)
         }
+        
+        // Enhanced process cleanup and error handling
+        cp.on('exit', (code, signal) => {
+          this.log.debug(`DEBUG: FFmpeg process ${cp.pid} exited with code ${code}, signal ${signal}`, this.cameraName)
+          if (code !== 0 && code !== null) {
+            this.log.warn(`HKSV: FFmpeg exited with non-zero code ${code}, this may indicate stream issues`, this.cameraName)
+          }
+        })
+        
+        cp.on('error', (error) => {
+          this.log.error(`DEBUG: FFmpeg process error: ${error}`, this.cameraName)
+        })
       })
       
       // Fast cleanup
