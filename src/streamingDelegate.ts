@@ -369,7 +369,7 @@ export class StreamingDelegate implements CameraStreamingDelegate {
       }
 
       if (this.videoConfig.preStreamCommand !== undefined) {
-        const output = execSync(this.videoConfig.preStreamCommand, { encoding: 'utf-8' });  // the default is 'buffer'
+        const output = execSync(this.videoConfig.preStreamCommand, { encoding: 'utf-8', timeout: 3000 });  // the default is 'buffer'
         this.log.debug('Pre stream command output:\n', output);
       }
 
@@ -527,7 +527,7 @@ export class StreamingDelegate implements CameraStreamingDelegate {
     }
 
     if (this.videoConfig.afterStreamCommand !== undefined) {
-      const output = execSync(this.videoConfig.afterStreamCommand, { encoding: 'utf-8' });  // the default is 'buffer'
+      const output = execSync(this.videoConfig.afterStreamCommand, { encoding: 'utf-8', timeout: 3000 });  // the default is 'buffer'
       this.log.debug('After stream command output:\n', output);
     }
 
