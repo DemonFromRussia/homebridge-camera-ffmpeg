@@ -1,7 +1,6 @@
 {
-  "name": "@homebridge-plugins/homebridge-camera-ffmpeg",
+  "name": "@demonfromrussia/homebridge-camera-ffmpeg",
   "displayName": "Homebridge Camera FFmpeg",
-  "type": "module",
   "version": "4.0.1",
   "description": "Homebridge Plugin Providing FFmpeg-based Camera Support",
   "author": {
@@ -9,10 +8,7 @@
   },
   "contributors": [
     {
-      "name": "Sunoo"
-    },
-    {
-      "name": "Khaos Tian"
+      "name": "DemonFromRussia"
     }
   ],
   "publishConfig": {
@@ -21,7 +17,7 @@
   "license": "ISC",
   "maintainers": [
     {
-      "name": "Homebridge"
+      "name": "DemonFromRussia"
     }
   ],
   "funding": [
@@ -44,10 +40,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git://github.com/homebridge-plugins/homebridge-camera-ffmpeg.git"
+    "url": "git://github.com/DemonFromRussia/homebridge-camera-ffmpeg.git"
   },
   "bugs": {
-    "url": "http://github.com/homebridge-plugins/homebridge-camera-ffmpeg/issues"
+    "url": "http://github.com/DemonFromRussia/homebridge-camera-ffmpeg/issues"
   },
   "keywords": [
     "homebridge-plugin",
