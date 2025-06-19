@@ -1,7 +1,6 @@
 {
   "name": "@demonfromrussia/homebridge-camera-ffmpeg",
   "displayName": "Homebridge Camera FFmpeg",
-  "type": "module",
   "version": "4.0.1",
   "description": "Homebridge Plugin Providing FFmpeg-based Camera Support",
   "author": {
