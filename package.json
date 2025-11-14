@@ -1,11 +1,11 @@
 {
-  "name": "@homebridge-plugins/homebridge-camera-ffmpeg",
+  "name": "@demonfromrussia/homebridge-camera-ffmpeg-command",
   "displayName": "Homebridge Camera FFmpeg",
   "type": "module",
-  "version": "4.1.0",
-  "description": "Homebridge Plugin Providing FFmpeg-based Camera Support",
+  "version": "4.1.0-command",
+  "description": "Homebridge Camera FFmpeg fork with pre and after stream command support",
   "author": {
-    "name": "Khaos Tian"
+    "name": "Dmitrii Zhoga"
   },
   "contributors": [
     {
@@ -24,30 +24,12 @@
       "name": "Homebridge"
     }
   ],
-  "funding": [
-    {
-      "type": "kofi",
-      "url": "https://ko-fi.com/sunookitsune"
-    },
-    {
-      "type": "paypal",
-      "url": "https://paypal.me/sunoo"
-    },
-    {
-      "type": "github",
-      "url": "https://github.com/Sunoo"
-    },
-    {
-      "type": "liberapay",
-      "url": "https://liberapay.com/Sunoo"
-    }
-  ],
   "repository": {
     "type": "git",
-    "url": "git://github.com/homebridge-plugins/homebridge-camera-ffmpeg.git"
+    "url": "git://github.com/demonfromrussia/homebridge-camera-ffmpeg.git"
   },
   "bugs": {
-    "url": "http://github.com/homebridge-plugins/homebridge-camera-ffmpeg/issues"
+    "url": "http://github.com/demonfromrussia/homebridge-camera-ffmpeg/issues"
   },
   "keywords": [
     "homebridge-plugin",
