@@ -76,6 +76,10 @@ export interface VideoConfig {
   debugReturn?: boolean
   recording?: boolean
   prebuffer?: boolean
+  preStreamCommand?: string
+  preStreamCommandTimeout?: number
+  afterStreamCommand?: string
+  afterStreamCommandTimeout?: number
 }
 
 export interface MqttCameraConfig {

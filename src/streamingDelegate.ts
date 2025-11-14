@@ -4,7 +4,7 @@ import { PickPortOptions, CameraConfig, ResolutionInfo, SessionInfo, VideoConfig
 import type { Logger } from './logger.js'
 
 import { Buffer } from 'node:buffer'
-import { spawn } from 'node:child_process'
+import { spawn, execSync } from 'node:child_process'
 import { createSocket, Socket } from 'node:dgram'
 import { env } from 'node:process'
 
@@ -368,6 +368,18 @@ export class StreamingDelegate implements CameraStreamingDelegate {
         videoBitrate = 0
       }
 
+      if (this.videoConfig.preStreamCommand !== undefined) {
+        try {
+          this.log.debug(`Executing pre stream command...\n${this.videoConfig.preStreamCommand}`, this.cameraName, this.videoConfig.debug)
+          const output = execSync(
+            this.videoConfig.preStreamCommand,
+            { encoding: 'utf-8', timeout: this.videoConfig.preStreamCommandTimeout ?? 3000 }
+          )
+        } catch (err) {
+          this.log.error(`Error executing pre stream command: ${err}`, this.cameraName)
+        }
+      }
+
       this.log.debug(`Video stream requested: ${request.video.width} x ${request.video.height}, ${request.video.fps} fps, ${request.video.max_bit_rate} kbps`, this.cameraName, this.videoConfig.debug)
       this.log.info(`Starting video stream: ${resolution.width > 0 ? resolution.width : 'native'} x ${resolution.height > 0 ? resolution.height : 'native'}, ${fps > 0 ? fps : 'native'
       } fps, ${videoBitrate > 0 ? videoBitrate : '???'} kbps${this.videoConfig.audio ? (` (${request.audio.codec})`) : ''}`, this.cameraName)
@@ -534,6 +546,19 @@ export class StreamingDelegate implements CameraStreamingDelegate {
         this.log.error(`Error occurred terminating two-way FFmpeg process: ${err}`, this.cameraName)
       }
     }
+
+    if (this.videoConfig.afterStreamCommand !== undefined) {
+        try {
+          this.log.debug(`Executing after stream command...\n${this.videoConfig.afterStreamCommand}`, this.cameraName, this.videoConfig.debug)
+          const output = execSync(
+            this.videoConfig.afterStreamCommand,
+            { encoding: 'utf-8', timeout: this.videoConfig.afterStreamCommandTimeout ?? 3000 }
+          )
+        } catch (err) {
+          this.log.error(`Error executing after stream command: ${err}`, this.cameraName)
+        }
+    }
+
     this.ongoingSessions.delete(sessionId)
     this.log.info('Stopped video stream.', this.cameraName)
   }
