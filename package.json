@@ -1,6 +1,6 @@
 {
   "name": "@demonfromrussia/homebridge-camera-ffmpeg-command",
-  "displayName": "Homebridge Camera FFmpeg",
+  "displayName": "Homebridge Camera FFmpeg Command",
   "type": "module",
   "version": "4.1.0-command",
   "description": "Homebridge Camera FFmpeg fork with pre and after stream command support",
