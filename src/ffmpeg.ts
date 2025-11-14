@@ -124,9 +124,10 @@ export class FfmpegProcess {
   }
 
   public stop(): void {
-    this.process.stdin.write(`q${os.EOL}`)
-    this.killTimeout = setTimeout(() => {
-      this.process.kill('SIGKILL')
-    }, 2 * 1000)
+    this.process.kill('SIGKILL')
+    // this.process.stdin.write(`q${os.EOL}`)
+    // this.killTimeout = setTimeout(() => {
+    //   this.process.kill('SIGKILL')
+    // }, 2 * 1000)
   }
 }
