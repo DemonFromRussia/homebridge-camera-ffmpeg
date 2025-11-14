@@ -379,7 +379,11 @@
                 "cameras[].videoConfig.mapaudio",
                 "cameras[].videoConfig.videoFilter",
                 "cameras[].videoConfig.encoderOptions",
-                "cameras[].videoConfig.debug"
+                "cameras[].videoConfig.debug",
+                "cameras[].videoConfig.preStreamCommand",
+                "cameras[].videoConfig.preStreamCommandTimeout",
+                "cameras[].videoConfig.afterStreamCommand",
+                "cameras[].videoConfig.afterStreamCommandTimeout"
               ]
             },
             {
