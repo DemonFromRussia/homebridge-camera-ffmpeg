@@ -235,6 +235,30 @@
                 "type": "boolean",
                 "description": "Enables audio streaming from camera."
               },
+              "preStreamCommand": {
+                "title": "Pre-Stream Command",
+                "type": "string",
+                "description": "A command that is executed before starting the stream. Can be used to prepare the camera or environment for streaming."
+              },
+              "preStreamCommandTimeout": {
+                "title": "Pre-Stream Command Timeout (ms)",
+                "type": "integer",
+                "placeholder": 3000,
+                "minimum": 0,
+                "description": "The maximum time to wait for the pre-stream command to complete, in milliseconds."
+              },
+              "afterStreamCommand": {
+                "title": "After-Stream Command",
+                "type": "string",
+                "description": "A command that is executed after stopping the stream. Can be used to clean up or reset the camera or environment after streaming."
+              },
+              "afterStreamCommandTimeout": {
+                "title": "After-Stream Command Timeout (ms)",
+                "type": "integer",
+                "placeholder": 3000,
+                "minimum": 0,
+                "description": "The maximum time to wait for the after-stream command to complete, in milliseconds."
+              },
               "debug": {
                 "title": "FFmpeg Debug Logging",
                 "type": "boolean",
